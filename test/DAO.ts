@@ -29,7 +29,7 @@ async function deployFixture() {
     signers.bob.address,
     signers.alice.address,
   ]
-  // build merkle tree by first three signers: owner bob alice
+  console.log('build merkle tree by first three signers: owner bob alice')
 
   // build leaves
   const leaves = leavesAddr.map(addr => keccak256(addr.toLowerCase().replace('0x', '')));
@@ -120,7 +120,7 @@ describe("DAO", function () {
   });
 
   it("only leaves will be able to participate in proposal or airdrop", async function () {
-    const [ ownerProof, bobProof, aliceProof, jamesProof, jordanProof, kobeProof] =
+    let [ ownerProof, bobProof, aliceProof, jamesProof, jordanProof, kobeProof] =
         [
             getProof(signers.owner.address, merkleTree),
             getProof(signers.bob.address, merkleTree),
@@ -142,31 +142,64 @@ describe("DAO", function () {
     // get contract instances
     const proposalContract = (await ethers.getContractAt("Proposal", proposalAddr)) as Proposal
     const airdropContract = (await ethers.getContractAt("Airdrop", airdropAddr)) as Airdrop
-    const addr1 = await proposalContract.delegateContract()
-    const addr2 = await airdropContract.delegateContract()
+    const addr1 = await proposalContract.dao()
+    const addr2 = await airdropContract.dao()
     // Expect both delegateContract is daoContractAddress
     expect(addr1 === daoContractAddress).to.eq(true)
     expect(addr2 === daoContractAddress).to.eq(true)
+
+    const tx1 = await proposalContract.connect(signers.owner).vote(ownerProof, true)
+    const tx2 = await proposalContract.connect(signers.bob).vote(bobProof, true)
+    const tx3 = await proposalContract.connect(signers.alice).vote(aliceProof, false)
+    await Promise.all([tx1.wait(), tx2.wait(), tx3.wait()])
+    expect(await proposalContract.yesVotes() === 2n).to.eq(true)
+    expect(await proposalContract.noVotes() === 1n).to.eq(true)
+    // expect james failed participating in proposal
+    let tx: any;
+    try {
+      tx = await proposalContract.connect(signers.james).vote(jamesProof, true)
+    } catch (error) {
+      expect(tx).to.eq(undefined)
+    }
+    const newLeavesAddr = [
+      signers.owner.address,
+      signers.bob.address,
+      signers.alice.address,
+      signers.james.address,
+      signers.jordan.address,
+      signers.kobe.address
+    ]
+    console.log('\nrebuild merkle tree by all signers: owner bob alice james jordan kobe')
+    // build leaves
+    const leaves = newLeavesAddr.map(addr => keccak256(addr.toLowerCase().replace('0x', '')));
+    // build Merkle Tree
+    const newMerkleTree = new MerkleTree(leaves, keccak256, { sortPairs: true });
+    // get Merkle Root
+    const root = newMerkleTree.getHexRoot();
+    console.log('update merkle root in daoContract')
+    await daoContract.updateMerkleRoot(root)
+    expect(await daoContract.merkleRoot()).to.eq(root)
+
+    jamesProof = getProof(signers.james.address, newMerkleTree)
+    jordanProof = getProof(signers.jordan.address, newMerkleTree)
+    kobeProof = getProof(signers.kobe.address, newMerkleTree)
+    const boolJames = await daoContract.connect(signers.james).verify(
+        jamesProof, signers.james.address
+    );
+    const boolJordan = await daoContract.connect(signers.jordan).verify(
+        jordanProof, signers.jordan.address
+    );
+    const boolKobe = await daoContract.connect(signers.kobe).verify(
+        kobeProof, signers.kobe.address
+    );
+    console.log(`DAO.verify(jamesProof, james) === ${boolJames}`);
+    console.log(`DAO.verify(jordanProof, jordan) === ${boolJordan}`);
+    console.log(`DAO.verify(kobeProof, kobe) === ${boolKobe}`);
+    // Expect owner bob alice in the merkle tree
+    expect(boolJames).to.eq(true);
+    expect(boolJordan).to.eq(true);
+    expect(boolKobe).to.eq(true);
   });
-
-//   it("increment the counter by 1", async function () {
-//     const countBeforeInc = await counterContract.getCount();
-//     const tx = await counterContract.connect(signers.alice).increment(1);
-//     await tx.wait();
-//     const countAfterInc = await counterContract.getCount();
-//     expect(countAfterInc).to.eq(countBeforeInc + 1n);
-//   });
-
-//   it("decrement the counter by 1", async function () {
-//     // First increment, count becomes 1
-//     let tx = await counterContract.connect(signers.alice).increment(1);
-//     await tx.wait();
-//     // Then decrement, count goes back to 0
-//     tx = await counterContract.connect(signers.alice).decrement(1);
-//     await tx.wait();
-//     const count = await counterContract.getCount();
-//     expect(count).to.eq(0);
-//   });
 });
 
 function getProof(address: String, merkleTree: MerkleTree) {
