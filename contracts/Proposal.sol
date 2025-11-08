@@ -1,11 +1,15 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 import "contracts/DAO.sol";
+import "@fhevm/solidity/lib/FHE.sol";
+import { SepoliaConfig } from "@fhevm/solidity/config/ZamaConfig.sol";
 
-contract Proposal {
+contract Proposal is SepoliaConfig{
     uint32 public proposalId;
-    uint256 public yesVotes;
-    uint256 public noVotes;
+    uint64 public decryptedYesVotes;
+    uint64 public decryptedNoVotes;
+    euint64 private encryptedYesVotes;
+    euint64 private encryptedNoVotes;
     uint256 public commitEnd;
     uint256 public revealEnd;
     string public description;
@@ -17,7 +21,7 @@ contract Proposal {
     bool public executed;
     
     event VoteCommitted(address committer, bytes32 commitment);
-    event VoteRevealed(address revealer, uint8 support);
+    event VoteRevealed(address revealer, euint8 support);
     event ProposalExecuted(address executor);
 
     // user commitment：proposalId => address => commitment (hash(support + salt))
@@ -38,7 +42,12 @@ contract Proposal {
         targetAddress = _target;
         value = _value;
         executionCalldata = _calldata;
+        encryptedYesVotes = FHE.asEuint64(0);
+        encryptedNoVotes = FHE.asEuint64(0);
         dao = DAO(payable(msg.sender));
+
+        FHE.allowThis(encryptedYesVotes);
+        FHE.allowThis(encryptedNoVotes);
     }
 
     function isActive() public view returns (bool) {
@@ -58,41 +67,67 @@ contract Proposal {
     }
 
     // reveal：submit the support and salt what you committed, and reptation be increased
-    function revealVote(uint8 support, bytes32 salt) external {
+    function revealVote(externalEuint8 esupport, bytes32 salt, bytes calldata attestation) external {
         require(block.timestamp > commitEnd, "Commit period not ended");
         require(block.timestamp <= revealEnd, "Proposal not active");
         require(!revealed[msg.sender], "Already revealed");
         
+        euint8 support = FHE.fromExternal(esupport, attestation);
         bytes32 commitment = keccak256(abi.encodePacked(support, salt));
         require(commitments[msg.sender] == commitment, "Invalid reveal");
         
-        _countVote(msg.sender, support);
+        ebool eq0 = FHE.eq(support, FHE.asEuint8(0));
+        ebool gt0 = FHE.eq(support, FHE.asEuint8(1));
+        uint64 weight = uint64(1 + dao.balanceOf(msg.sender));
+        euint64 eweight = FHE.asEuint64(weight);
+        encryptedYesVotes = FHE.select(gt0, FHE.add(encryptedYesVotes, eweight), FHE.add(encryptedYesVotes, FHE.asEuint64(0)));
+        encryptedNoVotes = FHE.select(eq0, FHE.add(encryptedNoVotes, eweight), FHE.add(encryptedNoVotes, FHE.asEuint64(0)));
         
         revealed[msg.sender] = true;
         dao.addReputation(proposalId, msg.sender, 1);
 
+        FHE.allowThis(encryptedYesVotes);
+        FHE.allowThis(encryptedNoVotes);
+
         emit VoteRevealed(msg.sender, support);
     }
 
-    function _countVote(address _voter, uint8 _support) internal {
-        uint256 weight = 1 + dao.balanceOf(_voter);
-        if (_support % 2 == 0) {
-            noVotes += weight;
-        } else {
-            yesVotes += weight;
-        }
+    function getYesVotes() public view returns (euint64) {
+        return encryptedYesVotes;
+    }
+
+    function getNoVotes() public view returns (euint64) {
+        return encryptedNoVotes;
     }
 
     // proposal execution logic
     function execute() external {
         require(block.timestamp > revealEnd, "Voting not ended");
         require(!executed, "Already executed");
-        require(yesVotes > noVotes, "Proposal did not pass");
+
+        require(decryptedYesVotes > decryptedNoVotes, "Proposal did not pass");
         require(address(dao).balance >= value, "DAO: insufficient ETH");
 
         executed = true;
-        emit ProposalExecuted(msg.sender);
 
         dao.executeProposal(proposalId, targetAddress, value, executionCalldata, msg.sender);
+        emit ProposalExecuted(msg.sender);
+    }
+
+    function requestDecryptVotes() external {
+        require(block.timestamp > revealEnd, "Voting not ended");
+
+        bytes32[] memory cts = new bytes32[](2);
+        cts[0] = FHE.toBytes32(encryptedYesVotes);
+        cts[1] = FHE.toBytes32(encryptedNoVotes);
+        FHE.requestDecryption(cts, this.callbackDecryptVotes.selector);
+    }
+
+    function callbackDecryptVotes(uint256 requestId, bytes memory cleartexts, bytes memory decryptionProof) public {
+        FHE.checkSignatures(requestId, cleartexts, decryptionProof);
+
+        (uint64 yesVotes, uint64 noVotes) = abi.decode(cleartexts, (uint64, uint64));
+        decryptedYesVotes = yesVotes;
+        decryptedNoVotes = noVotes;
     }
 }

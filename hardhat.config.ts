@@ -8,6 +8,7 @@ import "hardhat-gas-reporter";
 import type { HardhatUserConfig } from "hardhat/config";
 import { vars } from "hardhat/config";
 import "solidity-coverage";
+import "@fhevm/hardhat-plugin";
 
 // import "./tasks/accounts";
 // import "./tasks/FHECounter";
