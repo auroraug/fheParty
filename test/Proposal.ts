@@ -129,7 +129,7 @@ describe("DAO and Proposal", function () {
   });
 
   it("Should allow owner to update Merkle root", async function () {
-    expect(await dao.updateMerkleRoot(newRoot))
+    await expect(await dao.updateMerkleRoot(newRoot))
       .to.emit(dao, "MerkleRootUpdated")
       .withArgs(newRoot);
     expect(await dao.merkleRoot()).to.equal(newRoot);
@@ -149,7 +149,7 @@ describe("DAO and Proposal", function () {
     await signers.owner.sendTransaction({ to: daoContractAddress, value: ethers.parseEther("2.0") });
 
     // Create proposal as member1
-    expect(await dao.connect(signers.owner).createProposal(proofs.owner, description, votingPeriod, target, value, executionCalldata))
+    await expect(await dao.connect(signers.owner).createProposal(proofs.owner, description, votingPeriod, target, value, executionCalldata))
       .to.emit(dao, "ProposalCreated")
       .withArgs(signers.owner.address, await dao.proposal(1));
 
@@ -190,7 +190,7 @@ describe("DAO and Proposal", function () {
     const ownerExternalUint32Value = encryptedOwnerInputs.handles[0];
     const ownerInputProof = encryptedOwnerInputs.inputProof;
     const commitment1 = ethers.solidityPackedKeccak256(["bytes32","bytes32"], [uint8ArrayToBytes32(ownerExternalUint32Value), salt1]); // Yes
-    expect(await proposal.connect(signers.owner).commitVote(proofs.owner, commitment1))
+    await expect(await proposal.connect(signers.owner).commitVote(proofs.owner, commitment1))
       .to.emit(proposal, "VoteCommitted")
       .withArgs(signers.owner.address, commitment1);
 
@@ -203,7 +203,7 @@ describe("DAO and Proposal", function () {
     const bobInputProof = encryptedBobInputs.inputProof;  
     const salt2 = ethers.keccak256(ethers.toUtf8Bytes("salt2"));
     const commitment2 = ethers.solidityPackedKeccak256(["bytes32","bytes32"], [uint8ArrayToBytes32(bobExternalUint32Value), salt2]); // No
-    expect(await proposal.connect(signers.bob).commitVote(proofs.bob, commitment2))
+    await expect(await proposal.connect(signers.bob).commitVote(proofs.bob, commitment2))
       .to.emit(proposal, "VoteCommitted")
       .withArgs(signers.bob.address, commitment2);
 
@@ -239,15 +239,15 @@ describe("DAO and Proposal", function () {
 
     // Reveal votes
     console.log('\nowner calls revealVote()')
-    expect(await proposal.connect(signers.owner).revealVote(uint8ArrayToBytes32(ownerExternalUint32Value), salt1, ownerInputProof))
+    await expect(await proposal.connect(signers.owner).revealVote(uint8ArrayToBytes32(ownerExternalUint32Value), salt1, ownerInputProof))
       .to.emit(proposal, "VoteRevealed")
-      .withArgs(signers.owner.address, 1);
+      .withArgs(signers.owner.address);
     expect(await dao.balanceOf(signers.owner.address)).to.equal(1); //Reputation added
 
     console.log('bob calls revealVote()')
-    expect(await proposal.connect(signers.bob).revealVote(uint8ArrayToBytes32(bobExternalUint32Value), salt2, bobInputProof))
+    await expect(await proposal.connect(signers.bob).revealVote(uint8ArrayToBytes32(bobExternalUint32Value), salt2, bobInputProof))
       .to.emit(proposal, "VoteRevealed")
-      .withArgs(signers.bob.address, 0);
+      .withArgs(signers.bob.address);
     expect(await dao.balanceOf(signers.bob.address)).to.equal(1);
 
     // // Check vote counts (weight = 1 + balance; balance=0 initially, +1 after reveal, but counted before add?)
@@ -336,6 +336,7 @@ describe("DAO and Proposal", function () {
     await hre.fhevm.awaitDecryptionOracle();
     console.log('Execute Votes decryption...')
     console.log(`yesVotes: ${await proposal.decryptedYesVotes()} noVotes: ${await proposal.decryptedNoVotes()}\n`)
+    expect(await proposal.decrypted()).to.eq(true)
 
     // Execute (by anyone, but calls dao.executeProposal)
     const initialBalance = await provider.getBalance(signers.bob.address);

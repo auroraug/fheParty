@@ -14,14 +14,14 @@ contract Proposal is SepoliaConfig{
     uint256 public revealEnd;
     string public description;
     DAO public dao;
-
+    bool public decrypted;
     address public targetAddress;
     uint256 public value;
     bytes public executionCalldata;
     bool public executed;
     
     event VoteCommitted(address committer, bytes32 commitment);
-    event VoteRevealed(address revealer, euint8 support);
+    event VoteRevealed(address revealer);
     event ProposalExecuted(address executor);
 
     // user commitment：proposalId => address => commitment (hash(support + salt))
@@ -89,7 +89,7 @@ contract Proposal is SepoliaConfig{
         FHE.allowThis(encryptedYesVotes);
         FHE.allowThis(encryptedNoVotes);
 
-        emit VoteRevealed(msg.sender, support);
+        emit VoteRevealed(msg.sender);
     }
 
     function getYesVotes() public view returns (euint64) {
@@ -129,5 +129,6 @@ contract Proposal is SepoliaConfig{
         (uint64 yesVotes, uint64 noVotes) = abi.decode(cleartexts, (uint64, uint64));
         decryptedYesVotes = yesVotes;
         decryptedNoVotes = noVotes;
+        decrypted = true;
     }
 }
