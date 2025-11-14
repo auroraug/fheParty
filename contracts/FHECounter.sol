@@ -2,10 +2,10 @@
 pragma solidity ^0.8.24;
 
 import { FHE, euint32, externalEuint32 } from "@fhevm/solidity/lib/FHE.sol";
-import { SepoliaConfig } from "@fhevm/solidity/config/ZamaConfig.sol";
+import { ZamaEthereumConfig } from "@fhevm/solidity/config/ZamaConfig.sol";
 
 /// @title A simple counter contract
-contract Counter is SepoliaConfig {
+contract Counter is ZamaEthereumConfig {
   euint32 private _count;
 
   /// @notice Returns the current count

@@ -2,14 +2,14 @@
 pragma solidity ^0.8.20;
 import "contracts/DAO.sol";
 import "@fhevm/solidity/lib/FHE.sol";
-import { SepoliaConfig } from "@fhevm/solidity/config/ZamaConfig.sol";
+import { ZamaEthereumConfig } from "@fhevm/solidity/config/ZamaConfig.sol";
 
-contract Proposal is SepoliaConfig{
+contract Proposal is ZamaEthereumConfig{
     uint32 public proposalId;
     uint64 public decryptedYesVotes;
     uint64 public decryptedNoVotes;
-    euint64 private encryptedYesVotes;
-    euint64 private encryptedNoVotes;
+    euint64 public encryptedYesVotes;
+    euint64 public encryptedNoVotes;
     uint256 public commitEnd;
     uint256 public revealEnd;
     string public description;
@@ -88,24 +88,31 @@ contract Proposal is SepoliaConfig{
 
         FHE.allowThis(encryptedYesVotes);
         FHE.allowThis(encryptedNoVotes);
+        FHE.makePubliclyDecryptable(encryptedYesVotes);
+        FHE.makePubliclyDecryptable(encryptedNoVotes);
 
         emit VoteRevealed(msg.sender);
     }
 
-    function getYesVotes() public view returns (euint64) {
-        return encryptedYesVotes;
-    }
-
-    function getNoVotes() public view returns (euint64) {
-        return encryptedNoVotes;
-    }
-
     // proposal execution logic
-    function execute() external {
+    function execute(
+        bytes memory abiEncodedResult,
+        bytes memory decryptionProof
+    ) external {
         require(block.timestamp > revealEnd, "Voting not ended");
         require(!executed, "Already executed");
 
-        require(decryptedYesVotes > decryptedNoVotes, "Proposal did not pass");
+        bytes32[] memory cts = new bytes32[](2);
+        cts[0] = FHE.toBytes32(encryptedYesVotes);
+        cts[1] = FHE.toBytes32(encryptedNoVotes);
+
+        FHE.checkSignatures(cts, abiEncodedResult, decryptionProof);
+        (uint64 decodedYesVotes, uint64 decodedNoVotes) = abi.decode(
+            abiEncodedResult,
+            (uint64, uint64)
+        );
+
+        require(decodedYesVotes > decodedNoVotes, "Proposal did not pass");
         require(address(dao).balance >= value, "DAO: insufficient ETH");
 
         executed = true;
@@ -114,21 +121,23 @@ contract Proposal is SepoliaConfig{
         emit ProposalExecuted(msg.sender);
     }
 
-    function requestDecryptVotes() external {
-        require(block.timestamp > revealEnd, "Voting not ended");
+    // function requestDecryptVotes() internal returns (uint64, uint64) {
+    //     require(block.timestamp > revealEnd, "Voting not ended");
 
-        bytes32[] memory cts = new bytes32[](2);
-        cts[0] = FHE.toBytes32(encryptedYesVotes);
-        cts[1] = FHE.toBytes32(encryptedNoVotes);
-        FHE.requestDecryption(cts, this.callbackDecryptVotes.selector);
-    }
+    //     bytes32[] memory cts = new bytes32[](2);
+    //     cts[0] = FHE.toBytes32(encryptedYesVotes);
+    //     cts[1] = FHE.toBytes32(encryptedNoVotes);
 
-    function callbackDecryptVotes(uint256 requestId, bytes memory cleartexts, bytes memory decryptionProof) public {
-        FHE.checkSignatures(requestId, cleartexts, decryptionProof);
+        
+    //     FHE.requestDecryption(cts, this.callbackDecryptVotes.selector);
+    // }
 
-        (uint64 yesVotes, uint64 noVotes) = abi.decode(cleartexts, (uint64, uint64));
-        decryptedYesVotes = yesVotes;
-        decryptedNoVotes = noVotes;
-        decrypted = true;
-    }
+    // function callbackDecryptVotes(uint256 requestId, bytes memory cleartexts, bytes memory decryptionProof) public {
+    //     FHE.checkSignatures(requestId, cleartexts, decryptionProof);
+
+    //     (uint64 yesVotes, uint64 noVotes) = abi.decode(cleartexts, (uint64, uint64));
+    //     decryptedYesVotes = yesVotes;
+    //     decryptedNoVotes = noVotes;
+    //     decrypted = true;
+    // }
 }

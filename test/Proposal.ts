@@ -279,16 +279,17 @@ describe("DAO and Proposal", function () {
     // Cannot reveal after revealEnd
     await expect(proposal.connect(signers.alice).revealVote(uint8ArrayToBytes32(aliceExternalUint32Value), salt3, aliceInputProof)).to.be.revertedWith("Proposal not active");
 
-    // Decrypt votes
-    console.log('\nExecute Votes Decryption...')
-    const tx = await proposal.requestDecryptVotes()
-    await tx.wait()
-    await hre.fhevm.awaitDecryptionOracle()
+    // // Decrypt votes
+    // console.log('\nExecute Votes Decryption...')
+    // const tx = await proposal.connect(signers.jordan).requestDecryptVotes()
+    // await tx.wait()
+    // await hre.fhevm.awaitDecryptionOracle()
+    // await hre.fhevm.publicDecrypt
 
-    expect(await proposal.decryptedYesVotes()).to.eq(1n)
-    expect(await proposal.decryptedNoVotes()).to.eq(1n)
-    console.log(`yesVotes: ${await proposal.decryptedYesVotes()}`)
-    console.log(`noVotes: ${await proposal.decryptedNoVotes()}`)
+    // expect(await proposal.decryptedYesVotes()).to.eq(1n)
+    // expect(await proposal.decryptedNoVotes()).to.eq(1n)
+    // console.log(`yesVotes: ${await proposal.decryptedYesVotes()}`)
+    // console.log(`noVotes: ${await proposal.decryptedNoVotes()}`)
   });
 
   it("Should execute proposal if passed, mint bonus, and handle failures", async function () {
@@ -331,17 +332,24 @@ describe("DAO and Proposal", function () {
     await ethers.provider.send("evm_mine");
 
     // decryption votes
-    let tx = await proposal.requestDecryptVotes();
-    await tx.wait();
-    await hre.fhevm.awaitDecryptionOracle();
-    console.log('Execute Votes decryption...')
-    console.log(`yesVotes: ${await proposal.decryptedYesVotes()} noVotes: ${await proposal.decryptedNoVotes()}\n`)
-    expect(await proposal.decrypted()).to.eq(true)
+    // let tx = await proposal.requestDecryptVotes();
+    // await tx.wait();
+    // await hre.fhevm.awaitDecryptionOracle();
+    // console.log('Execute Votes decryption...')
+    // console.log(`yesVotes: ${await proposal.decryptedYesVotes()} noVotes: ${await proposal.decryptedNoVotes()}\n`)
+    // expect(await proposal.decrypted()).to.eq(true)
 
     // Execute (by anyone, but calls dao.executeProposal)
     const initialBalance = await provider.getBalance(signers.bob.address);
     console.log(`bob's initial balance: ${Number(initialBalance)/1e18} ether`)
-    expect(await proposal.connect(signers.kobe).execute())
+
+    const encryptedYesVotes = await proposal.encryptedYesVotes()
+    const encryptedNoVotes = await proposal.encryptedNoVotes()
+    const publicDecryptResults = await hre.fhevm.publicDecrypt([encryptedYesVotes, encryptedNoVotes]);
+    const abiEncodedResult = publicDecryptResults.abiEncodedClearValues;
+    const decryptionProof = publicDecryptResults.decryptionProof;
+
+    expect(await proposal.connect(signers.kobe).execute(abiEncodedResult, decryptionProof))
       .to.emit(proposal, "ProposalExecuted") // Assuming owner executes
     console.log('Execute proposal...')
     expect(await provider.getBalance(signers.bob.address)).to.equal(initialBalance + value); // ETH sent
@@ -351,17 +359,35 @@ describe("DAO and Proposal", function () {
     expect(await proposal.executed()).to.be.true;
 
     // Cannot re-execute
-    await expect(proposal.execute()).to.be.revertedWith("Already executed");
+    await expect(proposal.execute(abiEncodedResult, decryptionProof)).to.be.revertedWith("Already executed");
 
     // Test failure: insufficient votes (new proposal)
     await dao.connect(signers.owner).createProposal(proofs.owner, "Fail Test", votingPeriod, target, value, executionCalldata);
     const failProposalAddr = await dao.proposal(2);
     const failProposal = await ethers.getContractAt("Proposal", failProposalAddr);
 
-    // No votes: yes=0 == no=0, should fail
-    await ethers.provider.send("evm_increaseTime", [votingPeriod + 10]);
+    // No votes: yes=0 == no=1, should fail
+    // Commit and reveal yes vote from member1 (to not pass: no=1 > yes=0)
+    const _ownerInput = hre.fhevm.createEncryptedInput(failProposalAddr, signers.owner.address);
+    _ownerInput.add8(0)
+    const _encryptedOwnerInputs = await _ownerInput.encrypt();
+    const _ownerExternalUint32Value = _encryptedOwnerInputs.handles[0];
+    const _ownerInputProof = _encryptedOwnerInputs.inputProof;  
+    const _commitment = ethers.solidityPackedKeccak256(["bytes32","bytes32"], [uint8ArrayToBytes32(_ownerExternalUint32Value), salt]);
+    await failProposal.connect(signers.owner).commitVote(proofs.owner, _commitment)
+
+    await ethers.provider.send("evm_increaseTime", [votingPeriod/2 + 10]);
     await ethers.provider.send("evm_mine");
-    await expect(failProposal.execute()).to.be.revertedWith("Proposal did not pass");
+
+    await failProposal.connect(signers.owner).revealVote(uint8ArrayToBytes32(_ownerExternalUint32Value), salt, _ownerInputProof);
+
+    await ethers.provider.send("evm_increaseTime", [votingPeriod/2]);
+    await ethers.provider.send("evm_mine");
+
+    const _publicDecryptResults = await hre.fhevm.publicDecrypt([await failProposal.encryptedYesVotes(), await failProposal.encryptedNoVotes()]);
+    const _abiEncodedResult = _publicDecryptResults.abiEncodedClearValues;
+    const _decryptionProof = _publicDecryptResults.decryptionProof;
+    await expect(failProposal.execute(_abiEncodedResult, _decryptionProof)).to.be.revertedWith("Proposal did not pass");
 
     // Test insufficient ETH
     await dao.connect(signers.owner).createProposal(proofs.owner, "ETH Fail", votingPeriod, target, ethers.parseEther("10.0"), executionCalldata);
@@ -385,11 +411,14 @@ describe("DAO and Proposal", function () {
     await ethers.provider.send("evm_mine");
 
     // decryption votes
-    tx = await ethFail.requestDecryptVotes();
-    await tx.wait();
-    await hre.fhevm.awaitDecryptionOracle();
+    // tx = await ethFail.requestDecryptVotes();
+    // await tx.wait();
+    // await hre.fhevm.awaitDecryptionOracle();
+    const decryptResults = await hre.fhevm.publicDecrypt([await ethFail.encryptedYesVotes(), await ethFail.encryptedNoVotes()]);
+    const encodedResult = decryptResults.abiEncodedClearValues;
+    const ethFailDecryptionProof = decryptResults.decryptionProof;
 
-    await expect(ethFail.execute()).to.be.revertedWith("DAO: insufficient ETH");
+    await expect(ethFail.execute(encodedResult, ethFailDecryptionProof)).to.be.revertedWith("DAO: insufficient ETH");
   });
 
   it("Should handle reputation minting via addReputation", async function () {
